@@ -1,0 +1,7 @@
+# Editable install with no version control (c4crow==0.1)
+-e /Users/calvinhuang/c4crow
+matplotlib==3.9.1
+numpy==1.26.4
+pandas==2.2.2
+pytest==8.2.2
+torch==2.2.2
