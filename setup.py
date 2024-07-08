@@ -10,6 +10,7 @@ setup(
         'pandas',
         'matplotlib',
         'torch',
+        'PyYAML>=6.0.0,<7.0.0',
     ],
     tests_require=['pytest'],
     setup_requires=['pytest-runner'],

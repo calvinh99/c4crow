@@ -1,3 +1,5 @@
+import yaml
+from inspect import getfullargspec
 import random
 from enum import Enum
 import os
@@ -17,6 +19,45 @@ class Rewards(Enum):
     LOSE = -1
     WIN = 1
     DRAW = 0.5
+
+def save_config(save_dir, config):
+    config_path = os.path.join(save_dir, "config.yml")
+    with open(config_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False)
+    print(f"Configuration saved to {config_path}")
+
+def get_function_info(func):
+    return {
+        'name': func.__name__,
+        'module': func.__module__,
+        'args': getfullargspec(func).args
+    }
+
+def optimizer_to_dict(optimizer):
+    optimizer_dict = {
+        'name': optimizer.__class__.__name__,
+        'params': {}
+    }
+    for group in optimizer.param_groups:
+        for key, value in group.items():
+            if key != 'params':  # 'params' contains the actual parameters, which we don't need to save
+                optimizer_dict['params'][key] = value
+    return optimizer_dict
+
+def save_checkpoint(save_dir, policy_net, game_number):
+    checkpoint_path = os.path.join(save_dir, f"model_{game_number}.pth")
+    torch.save(policy_net.state_dict(), checkpoint_path)
+    print(f"Checkpoint saved to {checkpoint_path}")
+
+def save_eval_history(save_dir, eval_history, game_number):
+    eval_history_path = os.path.join(save_dir, f"eval_history_{game_number}.csv")
+    pd.DataFrame(eval_history, columns=['game', 'win_rate', 'avg_moves_to_win']).to_csv(eval_history_path, index=False)
+    print(f"Evaluation history saved to {eval_history_path}")
+
+def save_best_checkpoint(save_dir, policy_net, best_win_rate, game_number):
+    best_checkpoint_path = os.path.join(save_dir, "best_model.pth")
+    torch.save(policy_net.state_dict(), best_checkpoint_path)
+    print(f"New best model (win rate: {best_win_rate:.4f}) saved at game {game_number}")
 
 def estimate_model_size(model):
     n_params = sum(p.numel() for p in model.parameters())
@@ -129,9 +170,11 @@ def train(
     reward_decay=0.999, # high emphasis on future rewards
     n_games=20000,
     batch_size=96,
+    learning_rate=1e-3,
     EVAL_INTERVAL=20,
     PRINT_EVAL_INTERVAL=100,
-    TARGET_UPDATE_INTERVAL=10 # update lagged target net every 10 games
+    TARGET_UPDATE_INTERVAL=10, # update lagged target net every 10 games
+    CHECKPOINT_SAVE_INTERVAL=1000
 ):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     rl_memory = [] # list of lists of [state0, action_col_idx, state1, reward]
@@ -139,7 +182,7 @@ def train(
     # I need to make this so that we have games where RL player goes second as well
     train_player, policy_net = get_rl_player(path_to_weights, architecture)
     _, target_net = get_rl_player(path_to_weights, architecture) # lagged copy of policy net
-    optimizer = optim.Adam(policy_net.parameters())
+    optimizer = optim.Adam(policy_net.parameters(), lr=learning_rate)
     steps_done = 0
     eval_history = []
 
@@ -148,21 +191,53 @@ def train(
     save_dir = f"rl_checkpoints/{architecture}_policy_net_{timestamp}"
     os.makedirs(save_dir, exist_ok=True)
 
-    # print some stats
-    print("Training start.")
-    print(f"Architecture: {architecture}")
-    print(f"Path to existing weights: {path_to_weights}") # Refactor so that if it's None, we handle in this function instead of in rl_player
-    print(f"Device: {device}")
     n_params, mem_reqs = estimate_model_size(policy_net)
-    print(f"Trainable parameters: {n_params}")
-    print(f"RAM needed: {mem_reqs:.4f} Mb")
-    print(f"Saving checkpoints to: {save_dir}")
+
+    # Prepare configuration
+    config = {
+        'path_to_weights': path_to_weights,
+        'architecture': architecture,
+        'against_player': get_function_info(against_player),
+        'reward_decay': reward_decay,
+        'n_games': n_games,
+        'batch_size': batch_size,
+        'EVAL_INTERVAL': EVAL_INTERVAL,
+        'device': str(device),
+        'timestamp': timestamp,
+        'optimizer': optimizer_to_dict(optimizer),
+        'trainable_parameters': n_params,
+        'estimated_RAM_usage_MB': f"{mem_reqs:.4f}",
+        'save_directory': save_dir,
+        'PRINT_EVAL_INTERVAL': PRINT_EVAL_INTERVAL,
+        'TARGET_UPDATE_INTERVAL': TARGET_UPDATE_INTERVAL,
+        'CHECKPOINT_SAVE_INTERVAL': CHECKPOINT_SAVE_INTERVAL,
+    }
+
+    # Save configuration
+    save_config(save_dir, config)
+
+    # Print configuration
+    print("Training start.")
+    print("Configuration:")
+    print(yaml.dump(config, default_flow_style=False, sort_keys=False))
+
+    best_win_rate = 0.0
 
     # start playing games non stop, for N_TURNS
     for i in range(n_games):
         if (i % EVAL_INTERVAL) == (EVAL_INTERVAL - 1):
             win_rate, avg_moves_to_win = eval_winrate(train_player, against_player)
             eval_history.append([i+1, win_rate, avg_moves_to_win])
+
+            # Save best checkpoint after 1000 games
+            if i >= 1000 and win_rate > best_win_rate:
+                best_win_rate = win_rate
+                save_best_checkpoint(save_dir, policy_net, best_win_rate, i+1)
+
+        # Save regular checkpoint and evaluation history
+        if (i % CHECKPOINT_SAVE_INTERVAL) == (CHECKPOINT_SAVE_INTERVAL - 1):
+            save_checkpoint(save_dir, policy_net, i+1)
+            save_eval_history(save_dir, eval_history, i+1)
 
         if (i % PRINT_EVAL_INTERVAL) == (PRINT_EVAL_INTERVAL - 1):
             print(f'Game {i+1}: | win_rate: {eval_history[-1][1]:.4f} | moves_taken: {eval_history[-1][2]:.2f}')
@@ -206,16 +281,8 @@ def train(
             optimize_model(optimizer, policy_net, target_net, batch_size, reward_decay, rl_memory, device)
 
     print("Finished training.")
-
-    # save model weights with n_games, e.g. policy_net_2024-07-05_00-00-00/model_20000.pth
-    final_save_path = os.path.join(save_dir, f"model_{i+1}.pth")
-    torch.save(policy_net.state_dict(), final_save_path)
-    print(f"Final model saved to {final_save_path}")
-
-    # save evaluation history
-    eval_history_path = os.path.join(save_dir, f"eval_history_{i+1}.csv")
-    pd.DataFrame(eval_history, columns=['game', 'win_rate', 'avg_moves_to_win']).to_csv(eval_history_path, index=False)
-    print(f"Evaluation history saved to {eval_history_path}")
+    save_checkpoint(save_dir, policy_net, n_games)
+    save_eval_history(save_dir, eval_history, n_games)
     # plot_eval_history(eval_history_path)
 
 if __name__ == "__main__":
