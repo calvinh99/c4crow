@@ -1,6 +1,6 @@
 import numpy as np
 from enum import Enum
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple
 from collections import deque, defaultdict
 
 N_ROWS = 6
@@ -33,6 +33,9 @@ class Pieces(Enum):
 def create_board():
     return np.zeros([N_ROWS, N_COLS], dtype=np.int8)
 
+def make_board_hashable(board: np.ndarray) -> Tuple:
+    return tuple(board.flatten())
+
 def get_available_cols(board):
     return np.where(board[TOP_ROW] == Pieces.EMPTY.value)[0]
 
@@ -56,6 +59,9 @@ def check_win(board: np.ndarray, piece: Pieces) -> bool:
                 return True
     
     return False
+
+def is_terminal(board: np.ndarray) -> bool:
+    return len(get_available_cols(board)) == 0 or check_win(board, Pieces.P1) or check_win(board, Pieces.P2)
 
 def count_piece_connections(board: np.ndarray, piece: Pieces) -> Dict[int, int]:
     connections = defaultdict(set)

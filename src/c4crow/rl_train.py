@@ -11,14 +11,14 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 
-from c4crow.players import get_rl_player, random_player
+from c4crow.players import get_rl_player, random_player, get_minimax_player
 import c4crow.c4_engine as c4
 
 class Rewards(Enum):
     TIME_COST = -0.05
     LOSE = -1
     WIN = 1
-    DRAW = 0.5
+    DRAW = 0
 
 def save_config(save_dir, config):
     config_path = os.path.join(save_dir, "config.yml")
@@ -90,32 +90,32 @@ def eval_winrate(train_player, against_player, n_games=100):
                 break
     return len(moves_to_win)/n_games, sum(moves_to_win)/len(moves_to_win)
 
-def plot_eval_history(csv_path):
-    # Read the CSV file
+def plot_eval_history(csv_path, window_size=20, figsize=(5,4)):
     df = pd.read_csv(csv_path)
 
-    # Create a figure with two y-axes
-    fig, ax1 = plt.subplots(figsize=(10, 6))
-    ax2 = ax1.twinx()
+    # Calculate moving averages
+    df['win_rate_ma'] = df['win_rate'].rolling(window=window_size).mean()
+    df['avg_moves_to_win_ma'] = df['avg_moves_to_win'].rolling(window=window_size).mean()
 
-    # Plot win rate on the first y-axis
-    ax1.plot(df['Game'], df['Win Rate'], 'b-', label='Win Rate')
+    fig, ax1 = plt.subplots(figsize=figsize)
+    ax1.plot(df['game'], df['win_rate'], 'b-', alpha=0.5, label='Win Rate')
+    ax1.plot(df['game'], df['win_rate_ma'], 'b-', label='Win Rate MA')
     ax1.set_xlabel('Number of Games')
     ax1.set_ylabel('Win Rate', color='b')
     ax1.tick_params(axis='y', labelcolor='b')
+    ax1.legend(loc='best')
+    ax1.set_title('Win Rate Over Time')
+    plt.tight_layout()
+    plt.show()
 
-    # Plot average moves to win on the second y-axis
-    ax2.plot(df['Game'], df['Avg Moves to Win'], 'r-', label='Avg Moves to Win')
+    fig, ax2 = plt.subplots(figsize=figsize)
+    ax2.plot(df['game'], df['avg_moves_to_win'], 'r-', alpha=0.5, label='Avg Moves to Win')
+    ax2.plot(df['game'], df['avg_moves_to_win_ma'], 'r-', label='Avg Moves to Win MA')
+    ax2.set_xlabel('Number of Games')
     ax2.set_ylabel('Avg Moves to Win', color='r')
     ax2.tick_params(axis='y', labelcolor='r')
-
-    # Add title and legend
-    plt.title('Training Progress')
-    lines1, labels1 = ax1.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, labels1 + labels2, loc='best')
-
-    # Show the plot
+    ax2.legend(loc='best')
+    ax2.set_title('Average Moves to Win Over Time')
     plt.tight_layout()
     plt.show()
 
@@ -164,9 +164,12 @@ def optimize_model(optimizer, policy_net, target_net, batch_size, reward_decay, 
     optimizer.step() # subtract weights by grad
 
 def train(
-    path_to_weights: str,
     architecture: str,
     against_player,
+    path_to_weights=None,
+    eps_start=0.9,
+    eps_end=0.05,
+    eps_steps=2000,
     reward_decay=0.999, # high emphasis on future rewards
     n_games=20000,
     batch_size=96,
@@ -180,7 +183,13 @@ def train(
     rl_memory = [] # list of lists of [state0, action_col_idx, state1, reward]
 
     # I need to make this so that we have games where RL player goes second as well
-    train_player, policy_net = get_rl_player(path_to_weights, architecture)
+    train_player, policy_net = get_rl_player(
+        path_to_weights,
+        architecture,
+        eps_start=eps_start,
+        eps_end=eps_end,
+        eps_steps=eps_steps
+    )
     _, target_net = get_rl_player(path_to_weights, architecture) # lagged copy of policy net
     optimizer = optim.Adam(policy_net.parameters(), lr=learning_rate)
     steps_done = 0
@@ -240,9 +249,18 @@ def train(
             save_eval_history(save_dir, eval_history, i+1)
 
         if (i % PRINT_EVAL_INTERVAL) == (PRINT_EVAL_INTERVAL - 1):
-            print(f'Game {i+1}: | win_rate: {eval_history[-1][1]:.4f} | moves_taken: {eval_history[-1][2]:.2f}')
+            print(f'Game {i+1}: | win_rate: {eval_history[-1][1]:.4f} | moves_taken: {eval_history[-1][2]:.2f}', flush=True)
 
         p1_state0 = c4.create_board()
+
+        # TODO: to validate training data legitmacy I need to add a rl_memory player and then be able to replay episodes at a time.
+
+        # flip a coin to go first or second
+        go_second = random.choice([True, False])
+        if go_second:
+            # we don't wish to add the timecost step after P1 moves, always after P1 then P2 because that's the initial state that P1 deals with next
+            p2_col_idx = against_player(p1_state0, c4.Pieces.P2) # we can add board flipping code inside rl_player(), e.g. if piece != P1 then flip board, make action
+            p1_state0 = c4.drop_piece(p1_state0, c4.Pieces.P2, p2_col_idx)
 
         while True:
             steps_done += 1
@@ -286,5 +304,22 @@ def train(
     # plot_eval_history(eval_history_path)
 
 if __name__ == "__main__":
+    # train from scratch against random
+    # train("DQN2", random_player, n_games=40000, batch_size=256)
+
+    # train from near scratch against minimax, but increase exploration
+    # highly likely that minimax player just always loses...
+    train(
+        "DQN2",
+        get_minimax_player(max_depth=4),
+        path_to_weights="rl_checkpoints/DQN2_policy_net_2024-07-08_08-03-36/model_5000.pth",
+        eps_steps=10000,
+        n_games=100000,
+        batch_size=256
+    )
+
     # train against random
-    train(None, "DQN2", random_player)
+    # train("rl_checkpoints/DQN2_policy_net_2024-07-08_03-34-58/model_20000.pth", "DQN2", random_player)
+
+    # train against minimax
+    # train("rl_checkpoints/DQN2_policy_net_2024-07-08_03-34-58/model_20000.pth", "DQN2", get_minimax_player(max_depth=4))

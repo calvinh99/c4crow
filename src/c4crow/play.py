@@ -1,7 +1,7 @@
 import time
 from typing import Callable, Tuple
 import c4crow.c4_engine as c4
-from c4crow.players import real_player, random_player, get_rl_player, get_minimax_player
+from c4crow.players import real_player, random_player, get_rl_player, get_minimax_player, get_mcts_player
 
 PRETTY_LINE = "\n" + "█" * 100 + "\n"
 
@@ -56,10 +56,17 @@ if __name__ == "__main__":
     #       from opponents. E.g. if my opponent also max then when it's my turn and I see two branches that both
     #       return 1 million score, which is my win and which is my opponent's win? If opponent minimizes then 
     #       it's clear the -1 million is my loss!
+    # final_board, winning_piece = play_game(
+    #     random_player,
+    #     get_minimax_player(max_depth=4, xray=True),
+    #     5
+    # )
+
+    # MCTS
     final_board, winning_piece = play_game(
-        random_player,
         get_minimax_player(max_depth=4, xray=True),
-        5
+        get_mcts_player(n_iterations=10000, xray=True),
+        3
     )
     
     if winning_piece:
