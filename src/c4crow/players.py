@@ -1,10 +1,13 @@
 import os
-import numpy as np
 import random
-import torch
 import math
+from pprint import pprint
 from typing import Tuple
 from collections import defaultdict
+
+import numpy as np
+import torch
+
 import c4crow.c4_engine as c4
 from c4crow.DQN import DQN, DQN2
 
@@ -12,7 +15,9 @@ from c4crow.DQN import DQN, DQN2
 All players take in some number of inputs and output the column index to drop the piece in.
 """
 
-MINIMAX_WIN_SCORE = 1000000 # don't set to inf, otherwise can't distinguish between earlier and later wins
+# ---------------------------------------------------
+# Real Player
+# ---------------------------------------------------
 
 def real_player(board: np.ndarray, piece: c4.Pieces, **kwargs) -> int:
     while True:
@@ -25,11 +30,25 @@ def real_player(board: np.ndarray, piece: c4.Pieces, **kwargs) -> int:
         except ValueError:
             print("Invalid input. Please enter a number between 0 and 6.")
 
+# ---------------------------------------------------
+# Random Player
+# ---------------------------------------------------
+
 def random_player(board: np.ndarray, piece: c4.Pieces, **kwargs) -> int:
     available_cols = c4.get_available_cols(board)
     return random.choice(available_cols)
 
-def get_rl_player(path_to_weights: str, architecture: str) -> int:
+# ---------------------------------------------------
+# RL Player
+# ---------------------------------------------------
+
+def get_rl_player(
+    path_to_weights: str,
+    architecture: str,
+    eps_start=0.9,
+    eps_end=0.05,
+    eps_steps=2000
+) -> int:
     # initialize the model
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -47,9 +66,6 @@ def get_rl_player(path_to_weights: str, architecture: str) -> int:
     def rl_player(
         board: np.ndarray, piece: c4.Pieces,
         training=False,
-        eps_start=0.9,
-        eps_end=0.05,
-        eps_steps=2000,
         steps_done=0
     ):
         available_cols = c4.get_available_cols(board)
@@ -73,6 +89,13 @@ def get_rl_player(path_to_weights: str, architecture: str) -> int:
             return random.choice(available_cols) # exploration
         
     return rl_player, model
+
+
+# ---------------------------------------------------
+# Minimax Player
+# ---------------------------------------------------
+
+MINIMAX_WIN_SCORE = 1000000 # don't set to inf, otherwise can't distinguish between earlier and later wins
 
 def get_board_score(board: np.ndarray, piece: c4.Pieces):
     # helper function for minimax player, but possibly could be used in other players
@@ -161,3 +184,110 @@ def get_minimax_player(max_depth: int = 4, xray: bool = False) -> int:
         return best_col
     
     return minimax_player
+
+# ---------------------------------------------------
+# Monte Carlo Tree Search Player
+# ---------------------------------------------------
+
+def get_mcts_player(n_iterations=10, xray=False):
+
+    c = np.sqrt(2) # exploration coefficient
+
+    def get_unexplored_edges(node, state_action_tree): # it's a leaf node if there are any unexplored edges/child nodes or if it's a terminal node
+        available_edges = c4.get_available_cols(node)
+        state = c4.make_board_hashable(node)
+        unexplored_edges = []
+        for edge in available_edges:
+            state_action = tuple(list(state) + [edge])
+            if state_action not in state_action_tree:
+                unexplored_edges.append(edge)
+        return unexplored_edges
+    
+    def backprop(terminal_node, piece, traversal, state_action_tree):
+        if len(c4.get_available_cols(terminal_node)) == 0:
+            terminal_value = 0
+        elif c4.check_win(terminal_node, piece):
+            terminal_value = 1
+        else:
+            terminal_value = -1
+
+        for state, action in traversal:
+            if state not in state_action_tree:
+                state_action_tree[state] = {'N': 1}
+            else:
+                state_action_tree[state]['N'] += 1
+            if action not in state_action_tree[state]:
+                state_action_tree[state][action] = {'N': 1, 'Q': terminal_value}
+            else:
+                state_action_tree[state][action]['N'] += 1
+                state_action_tree[state][action]['Q'] += terminal_value
+
+    def mcts_player(board: np.ndarray, piece: c4.Pieces) -> int:
+        root_node = board
+        state_action_tree = {} # 'state' -> dict of 'action's and 'N', 'action' -> dict of 'Q' and 'N'
+
+        for i in range(n_iterations):
+            # select phase
+            # choose the best child node based on Upper Confidence Bound formula
+            traversal = []
+            selected_node = root_node
+            temp_piece = piece
+            expand_node = None
+            while True:
+                if c4.is_terminal(selected_node) and len(traversal) > 0:
+                    backprop(selected_node, piece, traversal, state_action_tree)
+                    break
+                
+                state = c4.make_board_hashable(selected_node)
+                unexplored_edges = get_unexplored_edges(selected_node, state_action_tree)
+                if len(unexplored_edges) > 0:
+                    expand_edge = random.choice(unexplored_edges)
+                    expand_node = c4.drop_piece(selected_node, temp_piece, expand_edge)
+                    traversal.append((state, expand_edge))
+                    break
+
+                available_edges = c4.get_available_cols(selected_node)
+                edge_values = []
+                for edge in available_edges:
+                    state_action = tuple(list(state) + [edge])
+                    UCB = (
+                        state_action_tree[state][edge]['Q'] / state_action_tree[state][edge]['N']
+                        + c * np.sqrt(np.log(state_action_tree[state]['N']) / state_action_tree[state][edge]['N'])
+                    )
+                    edge_values.append((edge, state_action, UCB))
+                selected_edge = max(edge_values, key=lambda x: x[2])[0]
+                traversal.append((state, selected_edge))
+                selected_node = c4.drop_piece(selected_node, temp_piece, selected_edge)
+                temp_piece = temp_piece.get_opponent_piece()
+
+            if expand_node is None:
+                continue # terminal, backpropped already, continue to next iteration
+
+            # simulate
+            while True:
+                available_edges = c4.get_available_cols(expand_node)
+                state = c4.make_board_hashable(expand_node)
+                selected_edge = random.choice(available_edges)
+                traversal.append((state, selected_edge))
+                expand_node = c4.drop_piece(expand_node, temp_piece, selected_edge)
+                temp_piece = temp_piece.get_opponent_piece()
+
+                if c4.is_terminal(expand_node) and len(traversal) > 0:
+                    backprop(expand_node, piece, traversal, state_action_tree)
+                    break
+            
+        root_dict = state_action_tree[c4.make_board_hashable(root_node)]
+        if xray == True:
+            print(f"After {n_iterations} simulations, the state_action_tree for root_node looks like this:")
+            pprint(root_dict, indent=4)
+
+        # now that we've updated state_action_tree via a bunch of simulations, we want to pick the edge
+        # from our root node that has the highest visit count
+        root_edges = []
+        for action, values in root_dict.items():
+            if action == 'N':
+                continue
+            root_edges.append((action, values['N']))
+        return max(root_edges, key=lambda x: x[1])[0]
+                    
+    return mcts_player
