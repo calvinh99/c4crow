@@ -10,6 +10,7 @@ import torch
 
 import c4crow.c4_engine as c4
 from c4crow.DQN import DQN, DQN2
+from c4crow.PolicyNet import PolicyCNN
 
 """
 All players take in some number of inputs and output the column index to drop the piece in.
@@ -39,16 +40,46 @@ def random_player(board: np.ndarray, piece: c4.Pieces, **kwargs) -> int:
     return random.choice(available_cols)
 
 # ---------------------------------------------------
-# RL Player
+# Policy Net Player
 # ---------------------------------------------------
 
-def get_rl_player(
+def get_policy_net_player(path_to_weights: str):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = PolicyCNN(c4.N_COLS)
+    model.to(device)
+    if path_to_weights is not None and os.path.exists(path_to_weights):
+        state_dict = torch.load(path_to_weights, map_location=device)
+        model.load_state_dict(state_dict)
+    
+    def policy_net_player(board: np.ndarray, training=False):
+        available_cols = c4.get_available_cols(board)
+        state = torch.tensor(board, dtype=torch.float32).unsqueeze(dim=0).unsqueeze(dim=0).to(device)
+        probs = model(state)
+        mask = torch.zeros_like(probs)
+        mask[0, available_cols] = 1
+        masked_probs = probs * mask
+        masked_probs = masked_probs / masked_probs.sum() # normalize again
+        if training:
+            action = torch.multinomial(masked_probs, 1).item()
+            log_prob = torch.log(masked_probs[:, action])
+            return action, log_prob
+        else:
+            action = torch.argmax(masked_probs).cpu().item()
+            return action
+    
+    return policy_net_player, model
+
+# ---------------------------------------------------
+# DQN Player
+# ---------------------------------------------------
+
+def get_dqn_player(
     path_to_weights: str,
     architecture: str,
     eps_start=0.9,
     eps_end=0.05,
     eps_steps=2000
-) -> int:
+):
     # initialize the model
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -63,7 +94,7 @@ def get_rl_player(
         state_dict = torch.load(path_to_weights, map_location=device)
         model.load_state_dict(state_dict)
 
-    def rl_player(
+    def dqn_player(
         board: np.ndarray, piece: c4.Pieces,
         training=False,
         steps_done=0
@@ -88,7 +119,7 @@ def get_rl_player(
         else:
             return random.choice(available_cols) # exploration
         
-    return rl_player, model
+    return dqn_player, model
 
 
 # ---------------------------------------------------
@@ -229,7 +260,7 @@ def get_mcts_player(n_iterations=10, xray=False):
         for i in range(n_iterations):
             # select phase
             # choose the best child node based on Upper Confidence Bound formula
-            traversal = []
+            traversal = [] # state, expand_edge, piece
             selected_node = root_node
             temp_piece = piece
             expand_node = None
@@ -268,7 +299,6 @@ def get_mcts_player(n_iterations=10, xray=False):
                 available_edges = c4.get_available_cols(expand_node)
                 state = c4.make_board_hashable(expand_node)
                 selected_edge = random.choice(available_edges)
-                traversal.append((state, selected_edge))
                 expand_node = c4.drop_piece(expand_node, temp_piece, selected_edge)
                 temp_piece = temp_piece.get_opponent_piece()
 
