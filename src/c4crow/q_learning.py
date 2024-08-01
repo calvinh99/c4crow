@@ -11,7 +11,7 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 
-from c4crow.players import get_rl_player, random_player, get_minimax_player
+from c4crow.players import get_dqn_player, random_player, get_minimax_player
 import c4crow.c4_engine as c4
 
 class Rewards(Enum):
@@ -44,9 +44,9 @@ def optimizer_to_dict(optimizer):
                 optimizer_dict['params'][key] = value
     return optimizer_dict
 
-def save_checkpoint(save_dir, policy_net, game_number):
+def save_checkpoint(save_dir, model, game_number):
     checkpoint_path = os.path.join(save_dir, f"model_{game_number}.pth")
-    torch.save(policy_net.state_dict(), checkpoint_path)
+    torch.save(model.state_dict(), checkpoint_path)
     print(f"Checkpoint saved to {checkpoint_path}")
 
 def save_eval_history(save_dir, eval_history, game_number):
@@ -54,9 +54,9 @@ def save_eval_history(save_dir, eval_history, game_number):
     pd.DataFrame(eval_history, columns=['game', 'win_rate', 'avg_moves_to_win']).to_csv(eval_history_path, index=False)
     print(f"Evaluation history saved to {eval_history_path}")
 
-def save_best_checkpoint(save_dir, policy_net, best_win_rate, game_number):
+def save_best_checkpoint(save_dir, model, best_win_rate, game_number):
     best_checkpoint_path = os.path.join(save_dir, "best_model.pth")
-    torch.save(policy_net.state_dict(), best_checkpoint_path)
+    torch.save(model.state_dict(), best_checkpoint_path)
     print(f"New best model (win rate: {best_win_rate:.4f}) saved at game {game_number}")
 
 def estimate_model_size(model):
@@ -119,7 +119,7 @@ def plot_eval_history(csv_path, window_size=20, figsize=(5,4)):
     plt.tight_layout()
     plt.show()
 
-def optimize_model(optimizer, policy_net, target_net, batch_size, reward_decay, rl_memory, device):
+def optimize_model(optimizer, model, target_model, batch_size, reward_decay, rl_memory, device):
     if len(rl_memory) < batch_size:
         return
     transitions = np.array(random.sample(rl_memory, batch_size), dtype=object) # (batch_size, 4)
@@ -143,16 +143,16 @@ def optimize_model(optimizer, policy_net, target_net, batch_size, reward_decay, 
     # reshape state batches for CNN
     state0_batch = state0_batch.unsqueeze(1) # (batch_size, 1, N_ROWS, N_COLS) extra 1 is for channel dimension since CNNs expected (n_channels, n_rows, n_cols)
     state1_batch = state1_batch.unsqueeze(1)
-    action_batch = action_batch.unsqueeze(1) # make it shape (batch_size, 1) for indexing, needs 2 dims since policy_net output is (batch_size, N_COLS) which is 2 dims
+    action_batch = action_batch.unsqueeze(1) # make it shape (batch_size, 1) for indexing, needs 2 dims since dqn output is (batch_size, N_COLS) which is 2 dims
 
     # prediction from policy net
     # SARSA, take only the prob of the action actually taken
-    state_action_values = policy_net(state0_batch).gather(1, action_batch) # (batch_size, 1)
+    state_action_values = model(state0_batch).gather(1, action_batch) # (batch_size, 1)
 
     # Output is [batch_size, N_COLS] -> we max across N_COLS and get (batch_size,)
     # we use max(1)[0] since max(1) will return the maxed tensor and the max indices and we only want the tensor
     next_state_values = torch.zeros(batch_size, device=device) # for timesteps where state1 is end of game, these values will be 0
-    next_state_values[state1_mask] = target_net(state1_batch).max(1)[0].detach() # idk: why detach? (batch_size, )
+    next_state_values[state1_mask] = target_model(state1_batch).max(1)[0].detach() # idk: why detach? (batch_size, )
     expected_state_action_values = (next_state_values * reward_decay) + reward_batch # (batch_size, )
     expected_state_action_values = expected_state_action_values.unsqueeze(1) # (batch_size, 1)
 
@@ -183,24 +183,24 @@ def train(
     rl_memory = [] # list of lists of [state0, action_col_idx, state1, reward]
 
     # I need to make this so that we have games where RL player goes second as well
-    train_player, policy_net = get_rl_player(
+    train_player, model = get_dqn_player(
         path_to_weights,
         architecture,
         eps_start=eps_start,
         eps_end=eps_end,
         eps_steps=eps_steps
     )
-    _, target_net = get_rl_player(path_to_weights, architecture) # lagged copy of policy net
-    optimizer = optim.Adam(policy_net.parameters(), lr=learning_rate)
+    _, target_model = get_dqn_player(path_to_weights, architecture) # lagged copy of policy net
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     steps_done = 0
     eval_history = []
 
-    # create save dir name based on current datetime and add it to policy_net, e.g. policy_net_2024-07-05_00-00-00
+    # create save dir name based on current datetime and add it to architecture, e.g. DQN2_2024-07-05_00-00-00
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    save_dir = f"rl_checkpoints/{architecture}_policy_net_{timestamp}"
+    save_dir = f"rl_checkpoints/{architecture}_{timestamp}"
     os.makedirs(save_dir, exist_ok=True)
 
-    n_params, mem_reqs = estimate_model_size(policy_net)
+    n_params, mem_reqs = estimate_model_size(model)
 
     # Prepare configuration
     config = {
@@ -241,11 +241,11 @@ def train(
             # Save best checkpoint after 1000 games
             if i >= 1000 and win_rate > best_win_rate:
                 best_win_rate = win_rate
-                save_best_checkpoint(save_dir, policy_net, best_win_rate, i+1)
+                save_best_checkpoint(save_dir, model, best_win_rate, i+1)
 
         # Save regular checkpoint and evaluation history
         if (i % CHECKPOINT_SAVE_INTERVAL) == (CHECKPOINT_SAVE_INTERVAL - 1):
-            save_checkpoint(save_dir, policy_net, i+1)
+            save_checkpoint(save_dir, model, i+1)
             save_eval_history(save_dir, eval_history, i+1)
 
         if (i % PRINT_EVAL_INTERVAL) == (PRINT_EVAL_INTERVAL - 1):
@@ -259,7 +259,7 @@ def train(
         go_second = random.choice([True, False])
         if go_second:
             # we don't wish to add the timecost step after P1 moves, always after P1 then P2 because that's the initial state that P1 deals with next
-            p2_col_idx = against_player(p1_state0, c4.Pieces.P2) # we can add board flipping code inside rl_player(), e.g. if piece != P1 then flip board, make action
+            p2_col_idx = against_player(p1_state0, c4.Pieces.P2) # we can add board flipping code inside dqn_player(), e.g. if piece != P1 then flip board, make action
             p1_state0 = c4.drop_piece(p1_state0, c4.Pieces.P2, p2_col_idx)
 
         while True:
@@ -293,13 +293,13 @@ def train(
 
             # lagged copy of target net every some steps, so after update, if interval is 10, the lag btwn target and policy becomes 1, 2, 3, ... 8, 9, 0
             if i % TARGET_UPDATE_INTERVAL == TARGET_UPDATE_INTERVAL - 1:
-                target_net.load_state_dict(policy_net.state_dict())
+                target_model.load_state_dict(model.state_dict())
 
             # optimize model
-            optimize_model(optimizer, policy_net, target_net, batch_size, reward_decay, rl_memory, device)
+            optimize_model(optimizer, model, target_model, batch_size, reward_decay, rl_memory, device)
 
     print("Finished training.")
-    save_checkpoint(save_dir, policy_net, n_games)
+    save_checkpoint(save_dir, model, n_games)
     save_eval_history(save_dir, eval_history, n_games)
     # plot_eval_history(eval_history_path)
 
@@ -309,17 +309,11 @@ if __name__ == "__main__":
 
     # train from near scratch against minimax, but increase exploration
     # highly likely that minimax player just always loses...
-    train(
-        "DQN2",
-        get_minimax_player(max_depth=4),
-        path_to_weights="rl_checkpoints/DQN2_policy_net_2024-07-08_08-03-36/model_5000.pth",
-        eps_steps=10000,
-        n_games=100000,
-        batch_size=256
-    )
-
-    # train against random
-    # train("rl_checkpoints/DQN2_policy_net_2024-07-08_03-34-58/model_20000.pth", "DQN2", random_player)
-
-    # train against minimax
-    # train("rl_checkpoints/DQN2_policy_net_2024-07-08_03-34-58/model_20000.pth", "DQN2", get_minimax_player(max_depth=4))
+    # train(
+    #     "DQN2",
+    #     get_minimax_player(max_depth=4),
+    #     path_to_weights="rl_checkpoints/DQN2_2024-07-08_08-03-36/model_5000.pth",
+    #     eps_steps=10000,
+    #     n_games=100000,
+    #     batch_size=256
+    # )

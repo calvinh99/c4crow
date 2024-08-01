@@ -1,7 +1,7 @@
 import time
 from typing import Callable, Tuple
 import c4crow.c4_engine as c4
-from c4crow.players import real_player, random_player, get_rl_player, get_minimax_player, get_mcts_player
+from c4crow.players import real_player, random_player, get_dqn_player, get_minimax_player, get_mcts_player
 
 PRETTY_LINE = "\n" + "█" * 100 + "\n"
 
@@ -37,12 +37,12 @@ if __name__ == "__main__":
     # final_board, winning_piece = play_game(real_player, real_player)
 
     # TODO: another flaw, the rl model thinks it's "1". So perhaps we need something like a "flip_board_for_rl" which
-    # temporarily swaps all the values so that the rl_player is "1", then swaps back only for displaying and checking 
+    # temporarily swaps all the values so that the dqn_player is "1", then swaps back only for displaying and checking 
     # wins. Got to remember to keep track of real_piece so that the rl output is placed using that piece.
-    # final_board, winning_piece = play_game(get_rl_player("./model_weights_DQN_CNN.pth"), real_player)
+    # final_board, winning_piece = play_game(get_dqn_player("./model_weights_DQN_CNN.pth"), real_player)
 
     # final_board, winning_piece = play_game(
-    #     get_rl_player("./model_weights_DQN_CNN.pth"),
+    #     get_dqn_player("./model_weights_DQN_CNN.pth"),
     #     get_minimax_player(max_depth=4, xray=True),
     #     5
     # )

@@ -2,10 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
 """
 N is batch_size -> 96
 C is number of channels -> 1
@@ -57,7 +53,7 @@ class DQN(nn.Module):
         return self.fc2(x)  # (N, 64) -> (N, outputs)
 
 class DQN2(nn.Module):
-    def __init__(self, outputs):
+    def __init__(self, n_outputs):
         super(DQN2, self).__init__()
         self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1)  # (N, 1, 6, 7) -> (N, 64, 6, 7)
         self.bn1 = nn.BatchNorm2d(64)  # (N, 64, 6, 7) -> (N, 64, 6, 7)
@@ -72,7 +68,7 @@ class DQN2(nn.Module):
         self.pool = nn.AdaptiveAvgPool2d((1, 1))  # (N, 128, 6, 7) -> (N, 128, 1, 1)
         
         self.fc1 = nn.Linear(128, 128)  # (N, 128) -> (N, 128)
-        self.fc2 = nn.Linear(128, outputs)  # (N, 128) -> (N, outputs)
+        self.fc2 = nn.Linear(128, n_outputs)  # (N, 128) -> (N, n_outputs)
 
     def forward(self, x):  # x: (N, 1, 6, 7)
         x = F.relu(self.bn1(self.conv1(x)))  # (N, 1, 6, 7) -> (N, 64, 6, 7)
@@ -81,4 +77,4 @@ class DQN2(nn.Module):
         x = self.pool(x)  # (N, 128, 6, 7) -> (N, 128, 1, 1)
         x = x.view(x.size(0), -1)  # (N, 128, 1, 1) -> (N, 128)
         x = F.relu(self.fc1(x))  # (N, 128) -> (N, 128)
-        return self.fc2(x)  # (N, 128) -> (N, outputs)
+        return self.fc2(x)  # (N, 128) -> (N, n_outputs)
