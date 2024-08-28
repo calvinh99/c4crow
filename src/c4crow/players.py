@@ -1,6 +1,8 @@
 import os
 import random
 import math
+import sys
+import time
 from pprint import pprint
 from typing import Tuple
 from collections import defaultdict
@@ -9,8 +11,8 @@ import numpy as np
 import torch
 
 import c4crow.c4_engine as c4
-from c4crow.DQN import DQN, DQN2
-from c4crow.PolicyNet import PolicyCNN
+from c4crow.models.DQN import DQN, DQN2
+from c4crow.models.PolicyNet import PolicyCNN
 
 """
 All players take in some number of inputs and output the column index to drop the piece in.
@@ -20,10 +22,10 @@ All players take in some number of inputs and output the column index to drop th
 # Real Player
 # ---------------------------------------------------
 
-def real_player(board: np.ndarray, piece: c4.Pieces, **kwargs) -> int:
+def real_player(board: np.ndarray, piece: int, **kwargs) -> int:
     while True:
         try:
-            col = int(input(f"Player {piece.display_str}, enter your move (0-6): "))
+            col = int(input(f"Player {piece}, enter your move (0-6): "))
             if col in c4.get_available_cols(board):
                 return col
             else:
@@ -35,7 +37,7 @@ def real_player(board: np.ndarray, piece: c4.Pieces, **kwargs) -> int:
 # Random Player
 # ---------------------------------------------------
 
-def random_player(board: np.ndarray, piece: c4.Pieces, **kwargs) -> int:
+def random_player(board: np.ndarray, piece: int, **kwargs) -> int:
     available_cols = c4.get_available_cols(board)
     return random.choice(available_cols)
 
@@ -95,7 +97,7 @@ def get_dqn_player(
         model.load_state_dict(state_dict)
 
     def dqn_player(
-        board: np.ndarray, piece: c4.Pieces,
+        board: np.ndarray, piece: int,
         training=False,
         steps_done=0
     ):
@@ -128,11 +130,11 @@ def get_dqn_player(
 
 MINIMAX_WIN_SCORE = 1000000 # don't set to inf, otherwise can't distinguish between earlier and later wins
 
-def get_board_score(board: np.ndarray, piece: c4.Pieces):
+def get_board_score(board: np.ndarray, piece: int):
     # helper function for minimax player, but possibly could be used in other players
-    if c4.check_win(board, piece):
+    if c4.check_win(board, piece) == "win":
         return MINIMAX_WIN_SCORE
-    elif c4.check_win(board, piece.get_opponent_piece()):
+    elif c4.check_win(board, piece.get_opponent_piece()) == "win":
         return -MINIMAX_WIN_SCORE
 
     score = 0
@@ -154,7 +156,7 @@ def get_board_score(board: np.ndarray, piece: c4.Pieces):
     return score
     
 def get_minimax_player(max_depth: int = 4, xray: bool = False) -> int:
-    def minimax_player(board: np.ndarray, piece: c4.Pieces) -> int:
+    def minimax_player(board: np.ndarray, piece: int) -> int:
         # so for minimax
         # we have maxxing and minning
         # for each state we serarch through all possible moves
@@ -167,7 +169,7 @@ def get_minimax_player(max_depth: int = 4, xray: bool = False) -> int:
         # Then we choose the move that has max score
 
         def minimax_tree_search(
-            board: np.ndarray, piece: c4.Pieces, 
+            board: np.ndarray, piece: int, 
             depth: int, maximizing: bool,
             # alpha: float, beta: float
         ) -> Tuple[int, float]:
@@ -211,7 +213,7 @@ def get_minimax_player(max_depth: int = 4, xray: bool = False) -> int:
             # float("-inf"), float("inf")
         )
         if xray:
-            print(f"[X-Ray] For Player {piece.display_str}, the estimated future score of dropping piece in {best_col} is {score}.")
+            print(f"[X-Ray] For Player {piece}, the estimated future score of dropping piece in {best_col} is {score}.")
         return best_col
     
     return minimax_player
@@ -220,104 +222,133 @@ def get_minimax_player(max_depth: int = 4, xray: bool = False) -> int:
 # Monte Carlo Tree Search Player
 # ---------------------------------------------------
 
-def get_mcts_player(n_iterations=10, xray=False):
+def get_mcts_player(n_iterations=10000, xray=False):
 
-    c = np.sqrt(2) # exploration coefficient
+    C = np.sqrt(2) # exploration coefficient
 
-    def get_unexplored_edges(node, state_action_tree): # it's a leaf node if there are any unexplored edges/child nodes or if it's a terminal node
-        available_edges = c4.get_available_cols(node)
-        state = c4.make_board_hashable(node)
-        unexplored_edges = []
-        for edge in available_edges:
-            state_action = tuple(list(state) + [edge])
-            if state_action not in state_action_tree:
-                unexplored_edges.append(edge)
-        return unexplored_edges
+    def calc_UCT(parent_key, child_key, state_dict):
+        exploit = state_dict[child_key]['WR']
+        explore = math.sqrt(math.log(state_dict[parent_key]['N']) / state_dict[child_key]['N'])
+        UCT = exploit + C * explore
+        return UCT
     
-    def backprop(terminal_node, piece, traversal, state_action_tree):
-        if len(c4.get_available_cols(terminal_node)) == 0:
-            terminal_value = 0
-        elif c4.check_win(terminal_node, piece):
-            terminal_value = 1
-        else:
-            terminal_value = -1
-
-        for state, action in traversal:
-            if state not in state_action_tree:
-                state_action_tree[state] = {'N': 1}
+    def backprop(traversal, state_dict, reward, root_piece):
+        for state_key, piece in traversal:
+            if state_key not in state_dict:
+                state_dict[state_key] = {'N': 1, 'W': 0, 'WR': 0}
             else:
-                state_action_tree[state]['N'] += 1
-            if action not in state_action_tree[state]:
-                state_action_tree[state][action] = {'N': 1, 'Q': terminal_value}
-            else:
-                state_action_tree[state][action]['N'] += 1
-                state_action_tree[state][action]['Q'] += terminal_value
+                state_dict[state_key]['N'] += 1
+            actual_reward = reward if piece == root_piece else -reward
+            state_dict[state_key]['W'] += actual_reward
+            state_dict[state_key]['WR'] = state_dict[state_key]['W'] / state_dict[state_key]['N']
 
-    def mcts_player(board: np.ndarray, piece: c4.Pieces) -> int:
-        root_node = board
-        state_action_tree = {} # 'state' -> dict of 'action's and 'N', 'action' -> dict of 'Q' and 'N'
+    def mcts_player(board: np.ndarray, piece: int) -> int:
+        root = board
+        root_key = c4.make_board_hashable(root)
+        root_piece = piece
+        state_dict = {} # state -> visit count, win count, win rate
+
+        root_children = {}
+        for a in c4.get_available_cols(root):
+            child = c4.drop_piece(root, root_piece, a)
+            child_key = c4.make_board_hashable(child)
+            root_children[a] = child_key
+
+        start_time = time.time()
+        last_updated_time = start_time - 10
+        update_interval_seconds = 0.5
+        min_wait_time_per_iter = 0 # for debugging
+        last_lines_printed = 0
+
+        def update_display(i):
+            nonlocal last_lines_printed, last_updated_time
+            current_time = time.time()
+            elapsed_time = current_time - start_time
+            iterations_per_second = i / elapsed_time if elapsed_time > 0 else 0
+
+            # Clear previous lines
+            if last_lines_printed > 0:
+                sys.stdout.write(f"\033[{last_lines_printed}A")  # Move cursor up
+                sys.stdout.write("\033[J")  # Clear from cursor to end of screen
+
+            progress = f"MCTS Progress: {i}/{n_iterations} | {iterations_per_second:.2f} it/s"
+            print(progress)
+            
+            print("Action metrics:")
+            lines_printed = 2  # Count for progress and "Action metrics:" lines
+            for a, child_key in root_children.items():
+                if child_key in state_dict:
+                    child_stats = state_dict[child_key]
+                    UCT = calc_UCT(root_key, child_key, state_dict)
+                    print(f"Action {a}: N={child_stats['N']}, WR={child_stats['WR']:.2f}, UCT={UCT:.2f}")
+                    lines_printed += 1
+            print(); lines_printed += 1 # fixes terminal print freeze issue
+            time.sleep(min_wait_time_per_iter)
+            last_updated_time = current_time
+            last_lines_printed = lines_printed
 
         for i in range(n_iterations):
             # select phase
             # choose the best child node based on Upper Confidence Bound formula
-            traversal = [] # state, expand_edge, piece
-            selected_node = root_node
-            temp_piece = piece
-            expand_node = None
-            while True:
-                if c4.is_terminal(selected_node) and len(traversal) > 0:
-                    backprop(selected_node, piece, traversal, state_action_tree)
-                    break
-                
-                state = c4.make_board_hashable(selected_node)
-                unexplored_edges = get_unexplored_edges(selected_node, state_action_tree)
-                if len(unexplored_edges) > 0:
-                    expand_edge = random.choice(unexplored_edges)
-                    expand_node = c4.drop_piece(selected_node, temp_piece, expand_edge)
-                    traversal.append((state, expand_edge))
-                    break
+            traversal = [] # state, action, piece
+            parent = root
+            current_piece = root_piece
+            expand_state = None
+            while True:            
+                # check if parent is leaf
+                parent_key = c4.make_board_hashable(parent)
+                for a in c4.get_available_cols(parent):
+                    child = c4.drop_piece(parent, current_piece, a)
+                    child_key = c4.make_board_hashable(child)
+                    if child_key not in state_dict or state_dict[child_key]['N'] == 0: # parent is leaf state
+                        traversal.append([parent_key, c4.get_opponent_piece(current_piece)]) # seriously need to add visualization (step by step) to validate this
+                        traversal.append([child_key, current_piece])
+                        expand_state = child
+                        current_piece = c4.get_opponent_piece(current_piece)
+                        break
+                if expand_state is not None: break
 
-                available_edges = c4.get_available_cols(selected_node)
-                edge_values = []
-                for edge in available_edges:
-                    state_action = tuple(list(state) + [edge])
-                    UCB = (
-                        state_action_tree[state][edge]['Q'] / state_action_tree[state][edge]['N']
-                        + c * np.sqrt(np.log(state_action_tree[state]['N']) / state_action_tree[state][edge]['N'])
-                    )
-                    edge_values.append((edge, state_action, UCB))
-                selected_edge = max(edge_values, key=lambda x: x[2])[0]
-                traversal.append((state, selected_edge))
-                selected_node = c4.drop_piece(selected_node, temp_piece, selected_edge)
-                temp_piece = temp_piece.get_opponent_piece()
+                # parent is not leaf, select highest UCT
+                max_a, max_UCT = None, float("-inf")
+                for a in c4.get_available_cols(parent):
+                    child = c4.drop_piece(parent, current_piece, a)
+                    child_key = c4.make_board_hashable(child)
+                    UCT = calc_UCT(parent_key, child_key, state_dict)
+                    if UCT > max_UCT:
+                        max_a = a
+                        max_UCT = UCT
+                traversal.append([parent_key, current_piece])
+                parent = c4.drop_piece(parent, current_piece, max_a)
+                current_piece = c4.get_opponent_piece(current_piece)
 
-            if expand_node is None:
-                continue # terminal, backpropped already, continue to next iteration
+            if expand_state is None:
+                continue # backpropped already, continue to next iteration. Is this necessary? Should we just exit from func?
 
             # simulate
+            curr_state = expand_state
             while True:
-                available_edges = c4.get_available_cols(expand_node)
-                state = c4.make_board_hashable(expand_node)
-                selected_edge = random.choice(available_edges)
-                expand_node = c4.drop_piece(expand_node, temp_piece, selected_edge)
-                temp_piece = temp_piece.get_opponent_piece()
+                a = random.choice(c4.get_available_cols(curr_state))
+                curr_state = c4.drop_piece(curr_state, current_piece, a)
+                game_status = c4.check_win(curr_state, current_piece)
+                if game_status == "win" and current_piece == root_piece:
+                    backprop(traversal, state_dict, 1, root_piece); break
+                elif game_status == "win" and current_piece != root_piece:
+                    backprop(traversal, state_dict, -1, root_piece); break
+                elif game_status == "draw":
+                    backprop(traversal, state_dict, 0, root_piece); break
+                current_piece = c4.get_opponent_piece(current_piece)
 
-                if c4.is_terminal(expand_node) and len(traversal) > 0:
-                    backprop(expand_node, piece, traversal, state_action_tree)
-                    break
-            
-        root_dict = state_action_tree[c4.make_board_hashable(root_node)]
-        if xray == True:
-            print(f"After {n_iterations} simulations, the state_action_tree for root_node looks like this:")
-            pprint(root_dict, indent=4)
+            if xray and (time.time() - last_updated_time) >= update_interval_seconds:
+                update_display(i + 1)
 
-        # now that we've updated state_action_tree via a bunch of simulations, we want to pick the edge
-        # from our root node that has the highest visit count
-        root_edges = []
-        for action, values in root_dict.items():
-            if action == 'N':
-                continue
-            root_edges.append((action, values['N']))
-        return max(root_edges, key=lambda x: x[1])[0]
+        if xray:
+            update_display(n_iterations)
+
+        root_action_metrics = []  # action, visit count
+        for a, hashable_child in root_children.items():
+            if hashable_child in state_dict:
+                root_action_metrics.append([a, state_dict[hashable_child]['N']])
+
+        return max(root_action_metrics, key=lambda x: x[1])[0]
                     
     return mcts_player

@@ -14,11 +14,10 @@ import torch.nn.functional as F
 from c4crow.players import get_dqn_player, random_player, get_minimax_player
 import c4crow.c4_engine as c4
 
-class Rewards(Enum):
-    TIME_COST = -0.05
-    LOSE = -1
-    WIN = 1
-    DRAW = 0
+TIME_COST = -0.05
+LOSE = -1
+WIN = 1
+DRAW = 0
 
 def save_config(save_dir, config):
     config_path = os.path.join(save_dir, "config.yml")
@@ -74,19 +73,21 @@ def eval_winrate(train_player, against_player, n_games=100):
         moves_taken = 0
 
         while True:
-            col_idx = train_player(board, c4.Pieces.P1) # greedy, training=False
-            board = c4.drop_piece(board, c4.Pieces.P1, col_idx)
+            col_idx = train_player(board, c4.P1) # greedy, training=False
+            board = c4.drop_piece(board, c4.P1, col_idx)
             moves_taken += 1
 
-            if c4.check_win(board, c4.Pieces.P1):
+            p1_game_status = c4.check_win(board, c4.P1)
+            if p1_game_status == "win":
                 moves_to_win.append(moves_taken)
                 break
-            elif len(c4.get_available_cols(board)) == 0:
+            elif p1_game_status == "draw":
                 break
 
-            col_idx = against_player(board, c4.Pieces.P2) # greedy, training=False
-            board = c4.drop_piece(board, c4.Pieces.P2, col_idx)
-            if c4.check_win(board, c4.Pieces.P2) or len(c4.get_available_cols(board)) == 0:
+            col_idx = against_player(board, c4.P2) # greedy, training=False
+            board = c4.drop_piece(board, c4.P2, col_idx)
+            p2_game_status = c4.check_win(board, c4.P2)
+            if p2_game_status == "win" or p2_game_status == "draw":
                 break
     return len(moves_to_win)/n_games, sum(moves_to_win)/len(moves_to_win)
 
@@ -259,36 +260,38 @@ def train(
         go_second = random.choice([True, False])
         if go_second:
             # we don't wish to add the timecost step after P1 moves, always after P1 then P2 because that's the initial state that P1 deals with next
-            p2_col_idx = against_player(p1_state0, c4.Pieces.P2) # we can add board flipping code inside dqn_player(), e.g. if piece != P1 then flip board, make action
-            p1_state0 = c4.drop_piece(p1_state0, c4.Pieces.P2, p2_col_idx)
+            p2_col_idx = against_player(p1_state0, c4.P2) # we can add board flipping code inside dqn_player(), e.g. if piece != P1 then flip board, make action
+            p1_state0 = c4.drop_piece(p1_state0, c4.P2, p2_col_idx)
 
         while True:
             steps_done += 1
 
             # we only record target player actions for our training
             # our model will train to treat itself as player 1 always
-            p1_col_idx = train_player(p1_state0, c4.Pieces.P1, training=True, steps_done=steps_done)
-            p1_state1 = c4.drop_piece(p1_state0, c4.Pieces.P1, p1_col_idx)
-            if c4.check_win(p1_state1, c4.Pieces.P1):
-                rl_memory.append([p1_state0, p1_col_idx, Rewards.WIN.value, None])
+            p1_col_idx = train_player(p1_state0, c4.P1, training=True, steps_done=steps_done)
+            p1_state1 = c4.drop_piece(p1_state0, c4.P1, p1_col_idx)
+            p1_game_status = c4.check_win(p1_state1, c4.P1)
+            if p1_game_status == "win":
+                rl_memory.append([p1_state0, p1_col_idx, WIN, None])
                 break
-            elif len(c4.get_available_cols(p1_state1)) == 0:
-                rl_memory.append([p1_state0, p1_col_idx, Rewards.DRAW.value, None])
+            elif p1_game_status == "draw":
+                rl_memory.append([p1_state0, p1_col_idx, DRAW, None])
                 break
 
             # penalize for losses
             p2_state0 = p1_state1
-            p2_col_idx = against_player(p2_state0, c4.Pieces.P2) # to train against itself we would need to flip board states so 1 -> 2, 2 -> 1, and then flip back.
-            p2_state1 = c4.drop_piece(p2_state0, c4.Pieces.P2, p2_col_idx)
-            if c4.check_win(p2_state1, c4.Pieces.P2):
-                rl_memory.append([p1_state0, p1_col_idx, Rewards.LOSE.value, None])
+            p2_col_idx = against_player(p2_state0, c4.P2) # to train against itself we would need to flip board states so 1 -> 2, 2 -> 1, and then flip back.
+            p2_state1 = c4.drop_piece(p2_state0, c4.P2, p2_col_idx)
+            p2_game_status = c4.check_win(p2_state1, c4.P2)
+            if p2_game_status == "win":
+                rl_memory.append([p1_state0, p1_col_idx, LOSE, None])
                 break
-            elif len(c4.get_available_cols(p2_state1)) == 0:
-                rl_memory.append([p1_state0, p1_col_idx, Rewards.DRAW.value, None])
+            elif p2_game_status == "draw":
+                rl_memory.append([p1_state0, p1_col_idx, DRAW, None])
                 break
 
             # penalize for time
-            rl_memory.append([p1_state0, p1_col_idx, Rewards.TIME_COST.value, p2_state1]) # state before any move, then state after p1 and p2 makes a move
+            rl_memory.append([p1_state0, p1_col_idx, TIME_COST, p2_state1]) # state before any move, then state after p1 and p2 makes a move
             p1_state0 = p2_state1
 
             # lagged copy of target net every some steps, so after update, if interval is 10, the lag btwn target and policy becomes 1, 2, 3, ... 8, 9, 0
@@ -305,15 +308,4 @@ def train(
 
 if __name__ == "__main__":
     # train from scratch against random
-    # train("DQN2", random_player, n_games=40000, batch_size=256)
-
-    # train from near scratch against minimax, but increase exploration
-    # highly likely that minimax player just always loses...
-    # train(
-    #     "DQN2",
-    #     get_minimax_player(max_depth=4),
-    #     path_to_weights="rl_checkpoints/DQN2_2024-07-08_08-03-36/model_5000.pth",
-    #     eps_steps=10000,
-    #     n_games=100000,
-    #     batch_size=256
-    # )
+    train("DQN2", random_player, n_games=40000, batch_size=256)

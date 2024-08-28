@@ -1,75 +1,64 @@
 import time
+import argparse
 from typing import Callable, Tuple
+import numpy as np
+
 import c4crow.c4_engine as c4
 from c4crow.players import real_player, random_player, get_dqn_player, get_minimax_player, get_mcts_player
 
 PRETTY_LINE = "\n" + "█" * 100 + "\n"
 
-def play_game(player1: Callable, player2: Callable, ux_time: int = 0) -> Tuple[c4.np.ndarray, c4.Pieces]:
+def play_game(player1_func: Callable, player2_func: Callable, ux_time: int = 0) -> Tuple[np.ndarray, int]:
     board = c4.create_board()
-    current_piece = c4.Pieces.P1
-    piece_to_player = {c4.Pieces.P1: player1, c4.Pieces.P2: player2}
+    current_piece = c4.P1
+    piece_to_player_func = {c4.P1: player1_func, c4.P2: player2_func}
 
     print(PRETTY_LINE)
     c4.display_board(board)
     while True:
         # let player make a move
-        print(f"Player {current_piece.display_str}'s turn. Player is thinking...\n")
-        col_idx = piece_to_player[current_piece](board, current_piece)
+        print(f"Player {current_piece}'s turn. Player is thinking...\n")
+        col_idx = piece_to_player_func[current_piece](board, current_piece)
         board = c4.drop_piece(board, current_piece, col_idx)
 
-        print(f"Player {current_piece.display_str} placed a piece in column {col_idx}.\n")
+        print(f"Player {current_piece} placed a piece in column {col_idx}.\n")
         c4.display_board(board)
         print(PRETTY_LINE)
                 
-        if c4.check_win(board, current_piece):
+        game_status = c4.check_win(board, current_piece)
+        if game_status == "win":
             return board, current_piece
-
-        if len(c4.get_available_cols(board)) == 0:
-            return board, None  # Draw
+        elif game_status == "draw":
+            return board, None
         
         time.sleep(ux_time) # let user register the move that just happened if it did not result in a win
 
-        current_piece = c4.Pieces.P2 if current_piece == c4.Pieces.P1 else c4.Pieces.P1
+        current_piece = c4.get_opponent_piece(current_piece)
 
 if __name__ == "__main__":
+    # python src/c4crow/play.py --player1 human --player2 dqn --wait 0
+    parser = argparse.ArgumentParser(description="Play Connect4 with different players.")
+    parser.add_argument('--player1', choices=['human', 'dqn', 'minimax', 'mcts', 'random'], default='human', help='Player 1 type')
+    parser.add_argument('--player2', choices=['human', 'dqn', 'minimax', 'mcts', 'random'], default='human', help='Player 2 type')
+    parser.add_argument('--wait', type=int, default=3, help='Wait time between moves (seconds)')
+    args = parser.parse_args()
+
     print("Welcome to Connect4!")
-    # final_board, winning_piece = play_game(real_player, real_player)
 
-    # TODO: another flaw, the rl model thinks it's "1". So perhaps we need something like a "flip_board_for_rl" which
-    # temporarily swaps all the values so that the dqn_player is "1", then swaps back only for displaying and checking 
-    # wins. Got to remember to keep track of real_piece so that the rl output is placed using that piece.
-    # final_board, winning_piece = play_game(get_dqn_player("./model_weights_DQN_CNN.pth"), real_player)
+    arg_to_player_func = {
+        "human": real_player,
+        "dqn": get_dqn_player("/home/calvinhuang/rl/c4crow/rl_checkpoints/DQN2_2024-08-26_21-12-02/model_18000.pth", "DQN2")[0],
+        "minimax": get_minimax_player(max_depth=4, xray=True),
+        "mcts": get_mcts_player(n_iterations=20000, xray=True),
+        "random": random_player
+    }
 
-    # final_board, winning_piece = play_game(
-    #     get_dqn_player("./model_weights_DQN_CNN.pth"),
-    #     get_minimax_player(max_depth=4, xray=True),
-    #     5
-    # )
+    player1_func = arg_to_player_func[args.player1]
+    player2_func = arg_to_player_func[args.player2]
 
-    # FOUND A BIG BUG in the Minimax, if given obvious opportunity to win it won't! Because if the future
-    # score for an earlier column is a win, then it's already infinity! So if another infinity it won't update!
-    # We need to add a gamma like 0.9 that multiplies to the score of each turn, so that earlier turns are prioritized!
-    # And we shouldn't use infinity, we should use a large positive number, e.g. 1 million.
-    # Note: the reason we minimize opponent score is not to make it make the worst moves, but rather the best moves!
-    #       why min instead of also max? Simply because we need a way to differentiate for each player the outcomes
-    #       from opponents. E.g. if my opponent also max then when it's my turn and I see two branches that both
-    #       return 1 million score, which is my win and which is my opponent's win? If opponent minimizes then 
-    #       it's clear the -1 million is my loss!
-    # final_board, winning_piece = play_game(
-    #     random_player,
-    #     get_minimax_player(max_depth=4, xray=True),
-    #     5
-    # )
-
-    # MCTS
-    final_board, winning_piece = play_game(
-        get_minimax_player(max_depth=4, xray=True),
-        get_mcts_player(n_iterations=10000, xray=True),
-        3
-    )
+    final_board, winning_piece = play_game(player1_func, player2_func, args.wait)
     
     if winning_piece:
-        print(f"Player {winning_piece.display_str} wins!")
+        print(f"Player {winning_piece} wins!")
     else:
         print("It's a draw!")

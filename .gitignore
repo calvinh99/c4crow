@@ -1,3 +1,6 @@
+# temp dirs
+claude_projects_upload/
+
 # model checkpoints
 rl_checkpoints/
 
