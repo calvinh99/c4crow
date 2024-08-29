@@ -1,25 +1,50 @@
-# c4crow
+## c4crow
+Hi there, welcome! The end goal of this repo is to replicate AlphaZero (parallel self-play RL training w/ MCTS variation using policy and value nets) for connect 4. On the way to that goal, I'll thoroughly learn and implement other game-playing algorithms, both non-rl and rl-based.
 
-This is a repo for training connect4 rl agents. This is a solved project, there are many connect4 rl repos out there because the game is easy to simulate from scratch, rules are simple and intuitive, and the overall complexity is not high. This serves more as my own foray into RL and will be a stepping stone for more ambitious projects in the future.
+Currently implemented algorithms:
 
-### Clone, Setup, Contribute
+1. Minimax (minimax, will add alpha-beta pruning soon)
+2. MCTS (Monte Carlo Tree Search)
+3. Q* (TD learning to approx DQN, need to fix, vs random player, no self-play)
+4. PolicyNet (REINFORCE, need to fix, vs random player, no self-play)
 
+TODO:
+
+5. A2C
+6. PPO
+7. AlphaZero
+
+---
+### Download and Run
 ```
-# clone
-git clone https://github.com/yourusername/C4CROW.git
+git clone https://github.com/calvinh99/c4crow.git
 cd c4crow
-
-# if you have miniconda installed
-conda create -n c4crow python
-conda activate c4crow
-
-# if you don't then just use venv
-python -m venv c4crow
-source c4crow/bin/activate
-
-# install, this lets you use c4crow like any other package but your code edits are immediately reflected
-pip install -e .
 pip install -r requirements.txt
+pip install -e .
+python src/c4crow/play.py --player1 human --player2 minimax
 ```
 
-Anyone can contribute, push new branches, make PRs but only I can approve PRs.
+---
+### UI
+The current UI is terminal-based, the GUI is coming soon. I'd like to highlight a nice feature I added recently - intuitive visualization into the player's "brain". Here's what it looks like for minimax:
+
+<img src="https://github.com/calvinh99/c4crow/blob/main/resources/readme_minimax_1.png" width="300">
+
+I am playing as yellow O here and minimax is red X. You can see that I am trying to play a sure-win move in connect 4 where if you get 3 in a row horizontally and the opponent does not block the left or right then you are guaranteed to win.
+
+<img src="https://github.com/calvinh99/c4crow/blob/main/resources/readme_minimax_2.png" width="320">
+
+Minimax player was able to detect that, as we can see from the scores calculated, it figured out that playing anywhere other than column 2 or column 5 would result in a loss.
+
+Personally this visualization has helped me find and fix bugs in my implementations and just overall understand the algorithms better. This is also why I'm committed to making the GUI soon.
+
+My current design of the GUI:
+
+<img src="https://github.com/calvinh99/c4crow/blob/main/resources/GUI_design.png" width="550">
+
+---
+### Additional Notes
+You can put agent vs agent with a simple command:
+```
+python src/c4crow/play.py --player1 minimax --player2 mcts
+```

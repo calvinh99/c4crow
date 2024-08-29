@@ -38,7 +38,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Play Connect4 with different players.")
     parser.add_argument('--player1', choices=['human', 'dqn', 'minimax', 'mcts', 'random'], default='human', help='Player 1 type')
     parser.add_argument('--player2', choices=['human', 'dqn', 'minimax', 'mcts', 'random'], default='human', help='Player 2 type')
-    parser.add_argument('--wait', type=int, default=3, help='Wait time between moves (seconds)')
+    parser.add_argument('--wait', type=int, default=0, help='Wait time between moves (seconds)')
     args = parser.parse_args()
 
     print("Welcome to Connect4!")
