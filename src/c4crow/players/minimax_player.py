@@ -7,8 +7,9 @@ import sys
 class MinimaxPlayer(Player):
     MINIMAX_WIN_SCORE = 1000000
 
-    def __init__(self, max_depth: int = 4, xray: bool = False):
+    def __init__(self, max_depth: int = 4, gamma: float = 0.999, xray: bool = False):
         self.max_depth = max_depth
+        self.gamma = gamma
         self.xray = xray
 
     def make_move(self, board: np.ndarray, piece: int) -> int:
@@ -18,7 +19,7 @@ class MinimaxPlayer(Player):
 
         if self.xray:
             print(f"\nMinimax search completed in {dt:.2f} seconds")
-            print(f"Best column: {best_col}, score: {best_score}")
+            print(f"Best column: {best_col}, score: {best_score:.2f}")
             self.print_move_scores(board, piece)
 
         return best_col
@@ -37,6 +38,7 @@ class MinimaxPlayer(Player):
         for col in available_cols:
             new_board = c4.drop_piece(board, piece, col)
             _, score = self.minimax_tree_search(new_board, c4.get_opponent_piece(piece), depth - 1, not maximizing)
+            score = self.gamma * score
             if maximizing and score > best_score:
                 best_score, best_col = score, col
             elif not maximizing and score < best_score:
@@ -74,23 +76,27 @@ class MinimaxPlayer(Player):
             _, score = self.minimax_tree_search(new_board, c4.get_opponent_piece(piece), self.max_depth - 1, False)
             move_scores.append((col, score))
 
-        move_scores.sort(key=lambda x: x[1], reverse=True)
-
         print("\nMove scores:")
         for col, score in move_scores:
-            print(f"Column {col}: {score}")
+            print(f"col {col}: {score:.2f}")
+        print()
 
         self.visualize_board_scores(board, piece, move_scores)
 
     def visualize_board_scores(self, board: np.ndarray, piece: int, move_scores):
-        score_board = np.full(board.shape, '   ')
+        score_board = np.full(board.shape, '  ')
         for col, score in move_scores:
             row = np.where(board[:, col] == 0)[0][-1]
-            score_str = f"{score:3d}"
-            score_board[row, col] = score_str
+            if abs(score) > 100000:
+                score_str = 'W' if score > 0 else 'L'
+            else:
+                score_str = f"{score:.2f}"
+            score_board[row, col] = f"{score_str:>2}"
 
-        print("\nBoard with move scores:")
+        print("\nBoard with move scores (truncated for better visuals):")
         for row in score_board:
             print("|" + "|".join(row) + "|")
-        print("-" * (4 * c4.N_COLS + 1))
-        print("|" + "|".join([f"{i:3d}" for i in range(c4.N_COLS)]) + "|")
+        print("-" * (3 * c4.N_COLS + 1))
+        print("|" + "|".join([f"{i:2d}" for i in range(c4.N_COLS)]) + "|")
+        print()
+
