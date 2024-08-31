@@ -32,7 +32,14 @@ def string_to_board(board_string: str) -> np.ndarray:
 def get_available_cols(board):
     return np.where(board[TOP_ROW] == EMPTY)[0]
 
-# we should offload saving the timesteps (state_0, col_idx, state_1, reward) to the RL training code!
+def double_channel_one_hot_board(board: np.ndarray, player_piece: int) -> np.ndarray:
+    # Create two 6x7 boards: first for player pieces (1s), second for opponent pieces (1s). All other positions are 0s.
+    opponent_piece = get_opponent_piece(player_piece)
+    channels = np.zeros((2, N_ROWS, N_COLS), dtype=np.float32)
+    channels[0] = (board == player_piece)
+    channels[1] = (board == opponent_piece)
+    return channels
+
 def drop_piece(board: np.ndarray, piece: int, col_idx: int) -> Optional[np.ndarray]:
     if col_idx not in get_available_cols(board):
         print(f"Column {col_idx} is not available!")
