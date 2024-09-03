@@ -47,11 +47,11 @@ if __name__ == "__main__":
         if player_type == 'human':
             return HumanPlayer()
         elif player_type == 'dqn':
-            return QPlayer("/home/calvinhuang/rl/c4crow/rl_checkpoints/DQN2_2024-08-26_21-12-02/model_18000.pth", "DQN2")
+            return QPlayer("SimpleConvDQN", "/home/calvinhuang/rl/c4crow/rl_checkpoints/SimpleConvDQN/2024-09-01_12:59AM/model_741359.pth")
         elif player_type == 'minimax':
             return MinimaxPlayer(max_depth=4, xray=True)
         elif player_type == 'mcts':
-            return MCTSPlayer(n_iterations=20000, xray=True)
+            return MCTSPlayer(n_iterations=10000, xray=True)
         elif player_type == 'random':
             return RandomPlayer()
 

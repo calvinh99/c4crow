@@ -18,10 +18,10 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed_all(SEED)
     torch.backends.cudnn.deterministic = True
 
-TIME_COST = -0.05
-LOSE = -1
 WIN = 1
 DRAW = 0
+LOSE = -1
+TIME_COST = -0.05
 UPDATE_WR_THRESHOLD = 0.9
 
 # Keep playing against self until we hit 90% win rate
@@ -48,50 +48,32 @@ lagged_model = target_player.model
 opponent_player = QPlayer(model_arch="SimpleConvDQN", path_to_weights=None)
 device = target_player.device
 
-def play_one_game(training=True, steps_done=0):
+def play_one_game():
     # There's no need to care about piece when we save game_memory since we convert it to double channel
     # and the first channel will always be the target player
     board = c4.create_board()
-    game_memory = [] if training else None
     n_moves = 0
-    steps = 0
 
     # Random coin flip to determine who goes first
     target_piece = random.choice([c4.P1, c4.P2])
-    opponent_piece = c4.get_opponent_piece(target_piece)
-
     current_piece = c4.P1  # Game always starts with P1
 
     while True:
         if current_piece == target_piece:
             n_moves += 1
-            steps += 1  # Increment steps for each move
-            # state and action will only ever be from target player
-            state = np.expand_dims(c4.double_channel_one_hot_board(board, target_piece), axis=0)
-            col_idx = target_player.make_move(board, current_piece, training=training, steps_done=steps_done + steps)
-            action = col_idx
+            col_idx = target_player.make_move(board, current_piece)
         else:
-            steps += 1  # Increment steps for opponent's move as well
             col_idx = opponent_player.make_move(board, current_piece)
 
         board = c4.drop_piece(board, current_piece, col_idx)
         game_status = c4.check_win(board, current_piece)
 
         if game_status != "not done":
-            if training:
-                reward = WIN if game_status == "win" and current_piece == target_piece else LOSE if game_status == "win" else DRAW
-                game_memory.append([state, action, reward, None])
-                return game_memory, steps
+            if game_status == "win":
+                result = "win" if current_piece == target_piece else "loss"
             else:
-                if game_status == "win":
-                    result = "win" if current_piece == target_piece else "loss"
-                else:
-                    result = "draw"
-                return [result, n_moves]
-
-        if training and current_piece == opponent_piece and steps > 1:
-            next_state = np.expand_dims(c4.double_channel_one_hot_board(board, target_piece), axis=0)
-            game_memory.append([state, action, TIME_COST, next_state])
+                result = "draw"
+            return [result, n_moves]
 
         current_piece = c4.get_opponent_piece(current_piece)
 
@@ -99,7 +81,7 @@ def evaluate(n_games=1000):
     wins = draws = total_moves_win = total_moves_draw = 0
 
     for _ in range(n_games):
-        result, moves = play_one_game(training=False)
+        result, moves = play_one_game()
         if result == "win":
             wins += 1
             total_moves_win += moves
@@ -121,13 +103,13 @@ def optimize(optimizer, game_memory, batch_size=64, reward_decay=0.99):
     transitions = random.sample(game_memory, batch_size)
     batch = list(zip(*transitions)) # convert list of row sublists into 4 column sublists
 
-    state_batch = torch.tensor(np.stack(batch[0], axis=0), dtype=torch.float, device=device).squeeze(1) # Bx2x6x7
+    state_batch = torch.tensor(np.stack(batch[0], axis=0), dtype=torch.float, device=device) # Bx2x6x7
     action_batch = torch.tensor(batch[1], dtype=torch.long, device=device).unsqueeze(1) # Bx1
     reward_batch = torch.tensor(batch[2], dtype=torch.float, device=device) # B
     
     next_states = batch[3]
     next_state_mask = torch.tensor([s is not None for s in next_states], dtype=torch.long, device=device)
-    next_state_batch = torch.tensor(np.stack([s if s is not None else np.zeros_like(batch[0][0]) for s in next_states], axis=0), dtype=torch.float32, device=device).squeeze(1) # Bx2x6x7
+    next_state_batch = torch.tensor(np.stack([s if s is not None else np.zeros_like(batch[0][0]) for s in next_states], axis=0), dtype=torch.float32, device=device) # Bx2x6x7
 
     # Compute Q(s_t, a) - the model computes Q(s_t), then we select the columns of actions taken
     state_action_values = target_model(state_batch).gather(1, action_batch)
@@ -174,25 +156,61 @@ def train(n_games, eval_interval=100, lag_interval=10):
         save_file = os.path.join(save_path, f"model_{total_steps_done}.pth")
         torch.save(target_model.state_dict(), save_file); print(f"Model saved to {save_file}")
 
-    global_game_memory = []
+    game_memory = []
     total_loss = 0
     t0 = time.time()
     et0 = t0
     last_eval_steps = 0
 
     for game in range(n_games):
-        game_memory, game_steps = play_one_game(training=True, steps_done=eps_steps_done)
-        global_game_memory.extend(game_memory)
+
+        # PLAY TRAINING GAME
+        game_steps = 0
+        target_piece = random.choice([c4.P1, c4.P2])
+        opponent_piece = c4.get_opponent_piece(target_piece)
+        board = c4.create_board()
+
+        if opponent_piece == c4.P1: # let opponent make move, then each step is target and opponent
+            opponent_action = opponent_player.make_move(board, opponent_piece)
+            board = c4.drop_piece(board, opponent_piece, opponent_action)
+
+        while True:
+            optimizer.param_groups[0]['lr'] = learning_rate_schedule(total_steps_done)
+            game_steps += 1
+
+            # Target player's turn
+            state = c4.double_channel_one_hot_board(board, target_piece)
+            action = target_player.make_move(board, target_piece, training=True, steps_done=eps_steps_done + game_steps)
+            board = c4.drop_piece(board, target_piece, action)
+            game_status = c4.check_win(board, target_piece)
+            if game_status != "not done":
+                game_memory.append([state, action, WIN if game_status == "win" else DRAW, None])
+                break
+            
+            # Opponent's turn
+            opponent_action = opponent_player.make_move(board, opponent_piece)
+            board = c4.drop_piece(board, opponent_piece, opponent_action)
+            game_status = c4.check_win(board, opponent_piece)
+            if game_status != "not done":
+                game_memory.append([state, action, LOSE if game_status == "win" else DRAW, None])
+                break
+            
+            next_state = c4.double_channel_one_hot_board(board, target_piece)
+            game_memory.append([state, action, TIME_COST, next_state])
+
+            if (total_steps_done + game_steps) % lag_interval == 0:
+                lagged_model.load_state_dict(target_model.state_dict())
+            loss = optimize(optimizer, game_memory, batch_size=batch_size, reward_decay=reward_decay)
+            total_loss += loss
+
+        # Final optimization step
+        loss = optimize(optimizer, game_memory, batch_size=batch_size, reward_decay=reward_decay)
+        total_loss += loss
         total_steps_done += game_steps
         eps_steps_done += game_steps
 
         # if len(global_game_memory) > 10000:
         #     global_game_memory = global_game_memory[-10000:]
-
-        loss = optimize(optimizer, global_game_memory, batch_size=batch_size, reward_decay=reward_decay)
-        total_loss += loss
-
-        optimizer.param_groups[0]['lr'] = learning_rate_schedule(total_steps_done)
 
         if game % eval_interval == 0:
             win_rate, draw_rate, avg_moves_win, avg_moves_draw = evaluate()

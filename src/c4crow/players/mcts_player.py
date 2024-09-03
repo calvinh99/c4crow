@@ -77,13 +77,13 @@ class MCTSPlayer(Player):
 
     def simulate(self, state, current_piece, root_piece):
         while True:
-            a = random.choice(c4.get_available_cols(state))
-            state = c4.drop_piece(state, current_piece, a)
             game_status = c4.check_win(state, current_piece)
             if game_status == "win":
                 return 1 if current_piece == root_piece else -1
             elif game_status == "draw":
                 return 0
+            a = random.choice(c4.get_available_cols(state))
+            state = c4.drop_piece(state, current_piece, a)
             current_piece = c4.get_opponent_piece(current_piece)
 
     def backprop(self, traversal, state_dict, reward, root_piece):
