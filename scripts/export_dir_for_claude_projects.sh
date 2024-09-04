@@ -8,8 +8,8 @@ out="claude_projects_upload"
 
 [ -d "$src" ] || { echo "Error: Source directory '$src' does not exist."; exit 1; }
 
-rm -rf "$out/*"
-mkdir -p "$out"
+rm -rf "./$out"
+mkdir -p "./$out"
 
 find "$src" -type f -name "*.py" ! -name "__init__.py" | while read -r file; do
     rel=${file#$src/}

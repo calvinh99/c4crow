@@ -132,3 +132,24 @@ def display_board(board):
         if r < rows - 1:
             print(BOLD + "  ╟" + "───┼" * (cols - 1) + "───╢" + RESET)
     print(BOLD + "  ╚" + "═══╧" * (cols - 1) + "═══╝" + RESET)
+
+def display_compact_boards(boards, empty_cell_char=" "):
+    if not boards: return
+    n_boards = len(boards)
+    board_width = N_COLS * 2 + 1
+    separator = " " * 3
+    turn_indicators = ("B" + " " * (board_width - 1) + separator) * n_boards
+    print(turn_indicators)
+    for row in range(N_ROWS):
+        row_strings = []
+        for board in boards:
+            row_str = "|"
+            for col in range(N_COLS):
+                if board[row, col] == EMPTY:
+                    row_str += empty_cell_char + "|"
+                elif board[row, col] == P1:
+                    row_str += "O|"
+                elif board[row, col] == P2:
+                    row_str += "X|"
+            row_strings.append(row_str)
+        print(separator.join(row_strings))

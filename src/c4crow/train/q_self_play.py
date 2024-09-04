@@ -48,11 +48,12 @@ lagged_model = target_player.model
 opponent_player = QPlayer(model_arch="SimpleConvDQN", path_to_weights=None)
 device = target_player.device
 
-def play_one_game():
+def play_one_game(show_compact=False):
     # There's no need to care about piece when we save game_memory since we convert it to double channel
     # and the first channel will always be the target player
     board = c4.create_board()
     n_moves = 0
+    boards = [board.copy()] if show_compact else []
 
     # Random coin flip to determine who goes first
     target_piece = random.choice([c4.P1, c4.P2])
@@ -66,6 +67,7 @@ def play_one_game():
             col_idx = opponent_player.make_move(board, current_piece)
 
         board = c4.drop_piece(board, current_piece, col_idx)
+        if show_compact: boards.append(board.copy())
         game_status = c4.check_win(board, current_piece)
 
         if game_status != "not done":
@@ -73,6 +75,11 @@ def play_one_game():
                 result = "win" if current_piece == target_piece else "loss"
             else:
                 result = "draw"
+            if show_compact:
+                n_boards_per_row = 6
+                n_rows = (len(boards) + n_boards_per_row - 1) // n_boards_per_row
+                for i in range(n_rows):
+                    c4.display_compact_boards(boards[i*n_boards_per_row:(i+1)*n_boards_per_row])
             return [result, n_moves]
 
         current_piece = c4.get_opponent_piece(current_piece)
@@ -150,6 +157,7 @@ def train(n_games, eval_interval=100, lag_interval=10):
         nonlocal eps_steps_done
         opponent_player.model.load_state_dict(target_model.state_dict())
         eps_steps_done = 0
+        play_one_game(show_compact=True)
         save_model()
 
     def save_model():
