@@ -8,7 +8,7 @@ from c4crow.models.DQN import SimpleConvDQN
 import c4crow.c4_engine as c4
 
 class QPlayer(Player):
-    def __init__(self, model_arch: str, path_to_weights: str, eps_start=0.9, eps_end=0.05, eps_steps=2000):
+    def __init__(self, model_arch: str, path_to_weights: str=None, eps_start=0.9, eps_end=0.05, eps_steps=2000):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         if model_arch == "SimpleConvDQN":
             self.model = SimpleConvDQN().to(self.device)
@@ -39,6 +39,10 @@ class QPlayer(Player):
                 return available_cols[np.argmax(state_action_values)]
         else:
             return random.choice(available_cols)
-        
+    
+    def move_to_device(self, device: torch.device):
+        self.device = device
+        self.model.to(device)
+
     def make_batch_move(self, boards: np.ndarray, piece: np.ndarray, training=False) -> np.ndarray:
         pass
