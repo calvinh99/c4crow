@@ -21,7 +21,12 @@ git clone https://github.com/calvinh99/c4crow.git
 cd c4crow
 pip install -r requirements.txt
 pip install -e .
+
+# play against minimax algorithm
 python src/c4crow/play.py --player1 human --player2 minimax
+
+# train rl agent w/ self-play
+python src/c4crow/train/q_self_play.py
 ```
 
 ---
